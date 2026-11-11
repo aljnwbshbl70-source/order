@@ -46,25 +46,41 @@ button:disabled{opacity:.5;cursor:default}
 
   <!-- 1) الدخول -->
   <section id="vAuth" class="card" hidden>
-    <p class="muted" style="margin-top:0">سجّل دخولك برقم جوالك، ثم وثّق رقمك عبر واتساب. الدخول للمندوبين المضافين من الإدارة فقط.</p>
+    <p class="muted" style="margin-top:0">الدخول للمندوبين المضافين من الإدارة فقط.</p>
     <label for="phone">رقم الجوال</label>
     <input id="phone" type="tel" dir="ltr" inputmode="tel" placeholder="05XXXXXXXX" autocomplete="tel">
     <label for="pass">كلمة المرور</label>
-    <input id="pass" type="password" autocomplete="current-password" placeholder="6 أحرف على الأقل">
+    <input id="pass" type="password" autocomplete="current-password">
     <p class="err" id="authErr"></p>
-    <div class="acts"><button class="pri" id="btnIn">دخول</button><button id="btnUp" style="flex:1 1 100%">حساب جديد (أول مرة)</button></div>
+    <div class="acts">
+      <button class="pri" id="btnIn">دخول</button>
+      <button id="btnForgot" style="flex:1 1 100%">🔑 نسيت كلمة المرور / أول دخول</button>
+    </div>
+    <p class="muted" style="margin-bottom:0">أول مرة؟ اضغط «نسيت كلمة المرور» لتوثيق رقمك عبر واتساب ثم تحدد كلمة مرورك.</p>
   </section>
 
-  <!-- 2) توثيق الرقم -->
+  <!-- 2) توثيق الرقم عبر البوت -->
   <section id="vVerify" class="card" hidden>
     <h3 style="margin-top:0">📲 توثيق رقمك</h3>
-    <p class="muted">نتأكد من رقمك عبر واتساب، وبعدها تُفعَّل صلاحيتك تلقائياً إن كنت مضافاً كمندوب.</p>
-    <p dir="ltr" style="text-align:right;font-weight:700" id="vPhone"></p>
+    <p class="muted">نتأكد أن الرقم لك عبر واتساب، ثم تحدد كلمة مرور جديدة.</p>
+    <label for="vPhoneIn">رقم الجوال</label>
+    <input id="vPhoneIn" type="tel" dir="ltr" inputmode="tel" placeholder="05XXXXXXXX" autocomplete="tel">
     <p class="err" id="vMsg" style="color:var(--muted)"></p>
     <div class="acts">
       <button class="pri" id="btnVerify">📲 توثيق الرقم عبر واتساب</button>
       <a class="btn wa" id="btnWa" hidden target="_blank" rel="noopener" style="flex:1 1 100%">🟢 افتح واتساب ثم اضغط إرسال</a>
+      <button id="btnBack" style="flex:1 1 100%">← رجوع لتسجيل الدخول</button>
     </div>
+  </section>
+
+  <!-- 2.5) كلمة المرور الجديدة -->
+  <section id="vPass" class="card" hidden>
+    <h3 style="margin-top:0">✅ تم توثيق رقمك</h3>
+    <p class="muted">اكتب كلمة المرور التي تريدها (6 أحرف على الأقل). ستدخل بها مستقبلاً مع رقمك.</p>
+    <label for="newPass">كلمة المرور الجديدة</label>
+    <input id="newPass" type="password" autocomplete="new-password">
+    <p class="err" id="passErr"></p>
+    <div class="acts"><button class="pri" id="btnSavePass">حفظ ودخول</button></div>
   </section>
 
   <!-- 3) الطلبات -->
@@ -79,7 +95,7 @@ button:disabled{opacity:.5;cursor:default}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signInWithCustomToken, updatePassword, signOut } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
 import { getFirestore, collection, doc, getDoc, setDoc, updateDoc, query, orderBy, limit, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
 
 const app = initializeApp({
@@ -89,7 +105,7 @@ const app = initializeApp({
 });
 const auth = getAuth(app), db = getFirestore(app);
 const $ = id => document.getElementById(id);
-const show = v => ["vAuth", "vVerify", "vOrders"].forEach(x => $(x).hidden = x !== v);
+const show = v => ["vAuth", "vVerify", "vPass", "vOrders"].forEach(x => $(x).hidden = x !== v);
 function toast(m) { const t = $("toast"); t.textContent = m; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), 2600); }
 function el(tag, props = {}, ...kids) {
   const e = document.createElement(tag);
@@ -113,76 +129,100 @@ function normPh(v) {
 const emailOf = ph => `p${ph}@courier.astorh.local`;
 const phoneOf = u => (/^p(\d+)@courier\.astorh\.local$/.exec(u?.email || "") || [])[1] || "";
 
-/* ---------- الدخول ---------- */
+/* ---------- الدخول (رقم + كلمة مرور) ---------- */
 const AUTH_ERR = {
-  "auth/invalid-credential": "الرقم أو كلمة المرور غير صحيحة. إن كانت أول مرة اضغط «حساب جديد».",
-  "auth/user-not-found": "لا يوجد حساب بهذا الرقم. اضغط «حساب جديد».", "auth/wrong-password": "كلمة المرور غير صحيحة.",
-  "auth/email-already-in-use": "الحساب موجود مسبقاً، اضغط «دخول».", "auth/weak-password": "كلمة المرور قصيرة (6 أحرف على الأقل).",
+  "auth/invalid-credential": "الرقم أو كلمة المرور غير صحيحة. إن نسيتها أو هذا أول دخول اضغط «نسيت كلمة المرور».",
+  "auth/user-not-found": "لا يوجد حساب بهذا الرقم. اضغط «نسيت كلمة المرور / أول دخول».", "auth/wrong-password": "كلمة المرور غير صحيحة.",
   "auth/too-many-requests": "محاولات كثيرة، انتظر قليلاً.", "auth/network-request-failed": "تأكد من الاتصال بالإنترنت."
 };
-async function doAuth(create) {
+async function doLogin() {
   const ph = normPh($("phone").value), pw = $("pass").value;
   $("authErr").textContent = "";
   if (!ph) { $("authErr").textContent = "اكتب رقم جوال سعودي صحيح (05XXXXXXXX)"; return; }
-  if (pw.length < 6) { $("authErr").textContent = "كلمة المرور 6 أحرف على الأقل"; return; }
-  try { create ? await createUserWithEmailAndPassword(auth, emailOf(ph), pw) : await signInWithEmailAndPassword(auth, emailOf(ph), pw); }
+  if (!pw) { $("authErr").textContent = "اكتب كلمة المرور، أو اضغط «نسيت كلمة المرور»"; return; }
+  try { await signInWithEmailAndPassword(auth, emailOf(ph), pw); }
   catch (e) { $("authErr").textContent = AUTH_ERR[e.code] || ("تعذر الدخول: " + (e.code || e.message)); }
 }
-$("btnIn").onclick = () => doAuth(false);
-$("btnUp").onclick = () => doAuth(true);
-$("pass").addEventListener("keydown", e => { if (e.key === "Enter") doAuth(false); });
+$("btnIn").onclick = doLogin;
+$("pass").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
 $("logout").onclick = () => signOut(auth);
+$("btnForgot").onclick = () => { $("vPhoneIn").value = $("phone").value; openVerify(); };
+$("btnBack").onclick = () => { stopVerify(); show("vAuth"); };
 
 /* ---------- الحالة ---------- */
 let unsubs = [];
 const clearSubs = () => { unsubs.forEach(u => u()); unsubs = []; };
 let me = null;               // { uid, phone, name }
+let settingPass = false;     // بين تسجيل الدخول بالتوكن وحفظ كلمة المرور لا نفتح الطلبات
 
-onAuthStateChanged(auth, user => {
+onAuthStateChanged(auth, async user => {
   clearSubs(); $("logout").hidden = !user;
-  if (!user) { me = null; show("vAuth"); return; }
+  if (!user) { me = null; if ($("vVerify").hidden && $("vPass").hidden) show("vAuth"); return; }
+  if (settingPass) { show("vPass"); return; }
   const phone = phoneOf(user);
   if (!phone) { toast("هذا الحساب ليس حساب مندوب"); signOut(auth); return; }
   me = { uid: user.uid, phone, name: phone };
-  let graceTimer = null, verified = false;
-  show("vVerify"); $("vPhone").textContent = "+" + phone; setupVerify();
-  // صلاحية المندوب يمنحها البوت (staff/{uid}) بعد توثيق الرقم
-  unsubs.push(onSnapshot(doc(db, "staff", user.uid), s => {
-    const d = s.data();
-    if (d && d.role === "courier") { clearTimeout(graceTimer); me.name = d.name || phone; startOrders(); }
-    else if (verified) { show("vVerify"); $("btnVerify").hidden = true; $("btnWa").hidden = true; $("vMsg").textContent = "⚠️ رقمك موثّق، لكنه غير مضاف كمندوب. تواصل مع الإدارة لإضافتك."; }
-  }, () => {}));
-  unsubs.push(onSnapshot(doc(db, "customers", user.uid), s => {
-    const d = s.data();
-    if (d?.phoneVerified && d.verifiedPhone === phone && !verified) {
-      verified = true; $("vMsg").textContent = "✅ تم توثيق رقمك، جارٍ تفعيل صلاحيتك…";
-      graceTimer = setTimeout(() => { $("btnVerify").hidden = true; $("btnWa").hidden = true; $("vMsg").textContent = "⚠️ رقمك موثّق، لكنه غير مضاف كمندوب. تواصل مع الإدارة لإضافتك."; }, 8000);
-    }
-  }, () => {}));
+  try { const s = await getDoc(doc(db, "staff", user.uid)); if (s.exists() && s.data().name) me.name = s.data().name; } catch { /* الاسم اختياري */ }
+  startOrders();
 });
 
-/* ---------- توثيق الرقم عبر البوت ---------- */
-const VERR = { invalid_phone: "رقم الجوال غير صحيح", bot_offline: "خدمة التوثيق غير متاحة حالياً، حاول بعد قليل", rate_limited: "انتظر ثواني ثم حاول مرة أخرى", expired: "انتهت صلاحية الكود، اطلب كوداً جديداً" };
-function setupVerify() {
-  let waiting = false, vUnsub = null;
-  const ref = doc(db, "verifyRequests", me.uid);
-  $("btnVerify").hidden = false; $("btnWa").hidden = true; $("btnVerify").disabled = false; $("btnVerify").textContent = "📲 توثيق الرقم عبر واتساب"; $("vMsg").textContent = "";
-  vUnsub?.(); vUnsub = onSnapshot(ref, s => {
-    const d = s.data(); if (!d || !waiting) return;
-    if (d.status === "pending" && d.waLink) {
+/* الصلاحية الحقيقية تحكمها قواعد Firestore: إن سُحبت أو لم تُمنح يرفض قراءة الطلبات */
+async function denied() {
+  await signOut(auth);
+  show("vAuth"); $("authErr").textContent = "⚠️ هذا الرقم غير مضاف كمندوب أو سُحبت صلاحيته. تواصل مع الإدارة.";
+}
+
+/* ---------- توثيق الرقم عبر البوت ثم كلمة المرور ---------- */
+const VERR = {
+  invalid_phone: "رقم الجوال غير صحيح", bot_offline: "خدمة التوثيق غير متاحة حالياً، حاول بعد قليل", rate_limited: "انتظر ثواني ثم حاول مرة أخرى",
+  expired: "انتهت صلاحية الكود، اطلب كوداً جديداً", server_error: "تعذّر تجهيز دخولك الآن، حاول بعد قليل",
+  not_courier: "رقمك موثّق لكنه غير مضاف كمندوب. تواصل مع الإدارة لإضافتك."
+};
+let vUnsub = null, vTimer = null, vWaiting = false;
+const stopVerify = () => { vUnsub?.(); vUnsub = null; clearTimeout(vTimer); vWaiting = false; };
+const nonce = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), b => b.toString(16).padStart(2, "0")).join("");
+
+function openVerify() {
+  stopVerify(); show("vVerify");
+  $("btnVerify").disabled = false; $("btnVerify").textContent = "📲 توثيق الرقم عبر واتساب"; $("btnWa").hidden = true; $("vMsg").textContent = "";
+  const id = nonce(), ref = doc(db, "courierAccess", id);
+  vUnsub = onSnapshot(ref, async s => {
+    const d = s.data(); if (!d || !vWaiting) return;
+    if (d.status === "verified" && d.token) {
+      stopVerify(); settingPass = true;
+      try { await signInWithCustomToken(auth, d.token); show("vPass"); }
+      catch (e) { settingPass = false; show("vVerify"); $("vMsg").textContent = "⚠️ تعذّر الدخول: " + (e.code || e.message); }
+    } else if (d.status === "pending" && d.waLink) {
       $("btnWa").href = d.waLink; $("btnWa").hidden = false; $("btnVerify").disabled = false; $("btnVerify").textContent = "🔄 كود جديد";
-      $("vMsg").textContent = d.lastError === "mismatch" ? "⚠️ أرسلت من رقم غير رقمك المسجّل. أرسل من نفس الرقم." : "اضغط الزر الأخضر ثم أرسل الرسالة الجاهزة كما هي.";
-    } else if (VERR[d.status]) { $("vMsg").textContent = "⚠️ " + VERR[d.status]; $("btnVerify").disabled = false; }
-  }, () => {});
-  unsubs.push(() => vUnsub?.());
+      $("vMsg").textContent = d.lastError === "mismatch" ? "⚠️ أرسلت من رقم غير الرقم المكتوب. أرسل من نفس الرقم." : "اضغط الزر الأخضر ثم أرسل الرسالة الجاهزة كما هي.";
+    } else if (VERR[d.status]) { clearTimeout(vTimer); $("vMsg").textContent = "⚠️ " + VERR[d.status]; $("btnWa").hidden = true; $("btnVerify").disabled = false; $("btnVerify").textContent = "📲 توثيق الرقم عبر واتساب"; }
+  }, () => { $("vMsg").textContent = "⚠️ تعذّر الاتصال بخدمة التوثيق"; });
   $("btnVerify").onclick = async () => {
-    $("btnVerify").disabled = true; $("btnWa").hidden = true; waiting = true; $("vMsg").textContent = "جارٍ تجهيز الكود...";
+    const ph = normPh($("vPhoneIn").value);
+    if (!ph) { $("vMsg").textContent = "⚠️ اكتب رقم جوال سعودي صحيح (05XXXXXXXX)"; return; }
+    $("btnVerify").disabled = true; $("btnWa").hidden = true; vWaiting = true; $("vMsg").textContent = "جارٍ تجهيز الكود...";
     try {
-      await setDoc(ref, { phone: me.phone, status: "requested", requestedAt: serverTimestamp() }, { merge: true });
-      setTimeout(() => { if (waiting && $("btnWa").hidden && !$("vVerify").hidden) { $("vMsg").textContent = "⚠️ الخدمة لا تستجيب الآن، حاول بعد قليل"; $("btnVerify").disabled = false; } }, 15000);
+      await setDoc(ref, { phone: ph, status: "requested", requestedAt: serverTimestamp() }, { merge: true });
+      clearTimeout(vTimer);
+      vTimer = setTimeout(() => { if (vWaiting && $("btnWa").hidden && !$("vVerify").hidden) { $("vMsg").textContent = "⚠️ الخدمة لا تستجيب الآن، حاول بعد قليل"; $("btnVerify").disabled = false; } }, 15000);
     } catch (e) { $("vMsg").textContent = "تعذر الطلب: " + (e.code || e.message); $("btnVerify").disabled = false; }
   };
 }
+
+$("btnSavePass").onclick = async () => {
+  const pw = $("newPass").value; $("passErr").textContent = "";
+  if (pw.length < 6) { $("passErr").textContent = "كلمة المرور 6 أحرف على الأقل"; return; }
+  $("btnSavePass").disabled = true;
+  try {
+    await updatePassword(auth.currentUser, pw);
+    settingPass = false; $("newPass").value = ""; $("pass").value = "";
+    const u = auth.currentUser, phone = phoneOf(u);
+    me = { uid: u.uid, phone, name: phone };
+    try { const s = await getDoc(doc(db, "staff", u.uid)); if (s.exists() && s.data().name) me.name = s.data().name; } catch { /* اختياري */ }
+    $("logout").hidden = false; startOrders(); toast("تم حفظ كلمة المرور ✓");
+  } catch (e) { $("passErr").textContent = "تعذّر الحفظ: " + (e.code === "auth/requires-recent-login" ? "أعد التوثيق عبر واتساب" : (e.code || e.message)); }
+  $("btnSavePass").disabled = false;
+};
 
 /* ---------- الطلبات ---------- */
 const ST = [["buying", "🛒 جاري الشراء"], ["bought", "✅ تم الشراء"], ["delivering", "🚚 في الطريق"], ["done", "🏁 تم التسليم"]];
@@ -197,7 +237,7 @@ function startOrders() {
   unsubs.push(onSnapshot(query(collection(db, "orders"), orderBy("createdAt", "desc"), limit(60)), s => {
     if (!first && s.docChanges().some(c => c.type === "added" && !c.doc.data().courierUid)) { toast("🔔 طلب جديد!"); navigator.vibrate?.(300); }
     first = false; all = s.docs; draw();
-  }, e => toast("تعذر تحميل الطلبات: " + (e.code || e.message))));
+  }, e => e.code === "permission-denied" ? denied() : toast("تعذر تحميل الطلبات: " + (e.code || e.message))));
 }
 
 const isMine = o => o.courierUid === me.uid;
